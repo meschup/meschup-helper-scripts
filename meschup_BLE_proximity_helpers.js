@@ -33,6 +33,7 @@ function BLE_updateProximityMap() {
         return 0;
     }
     
+    // Listens for events from modules that have "BleScanner" in their name
     if (api.event.current.moduleName.indexOf("BleScanner") == -1) {
         return 0;
     }
@@ -43,12 +44,11 @@ function BLE_updateProximityMap() {
     var rssi = Math.abs(data.rssi);
     var sid = api.event.current.sourceID;
 
-    // skip BLE devices which are not registered at the meschup platform
-    if (getDeviceById(id) === undefined){
+    // Skip BLE devices which are not registered at the meschup platform
+    if (!getDeviceById(id)){
         return;
     }
 
-    //log(data);
     if (map[sid] === undefined) {
         map[sid] = {};
     }
@@ -122,9 +122,9 @@ function BLE_updateProximityMap() {
 
 }
 
-//log(load("test"));
+// Generates the BLE map
 BLE_updateProximityMap();
-log("BLEMAP",api.state["BLEMAP"]);
+log("BLEMAP",api.state["BLEMAP"])
 
 /**
  * Checks if a beacon is near to a scanner. Returns true, if so.
