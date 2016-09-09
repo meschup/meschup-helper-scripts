@@ -1,11 +1,13 @@
 /**
- * meSchup BLE Helpers
+ * Generic meSchup Helpers Lib
  * 
  * All rights reserved by
  * Unversity of Stuttgart 2013-2017
  * 
  * author: Thomas Kubitza
  * email: thomas.kubitza@vis.uni-stuttgart.de
+ * 
+ * LastChange: 2016.09.09 TK - fixed oor in BLE map
  * 
  */
 
@@ -27,10 +29,10 @@ function BLE_updateProximityMap() {
     var BLE_PROXIMITY_SAMPLES = 3; // Samples used for running average
 
     // ToDo: Use moduleType instead of moduleName
-	if (api.event.current.moduleName === undefined) {
+    if (api.event.current.moduleName === undefined) {
         return 0;
     }
-	
+    
     if (api.event.current.moduleName.indexOf("BleScanner") == -1) {
         return 0;
     }
@@ -57,9 +59,10 @@ function BLE_updateProximityMap() {
     }
 
     var now = Date.now();
+   
 
     map[sid][id]["rssi"] = rssi;
-    map[sid][id]["t"] = now;
+   
 
     //*** Calculate moving average of rssi ***
     if (map[sid][id]["hist"] === undefined)
@@ -75,27 +78,40 @@ function BLE_updateProximityMap() {
     }
     var avgrssi = sum / map[sid][id]["hist"].length;
     map[sid][id]["avgrssi"] = avgrssi;
+    
 
     //*** Derive state ***
-    var silence = 0;
     var state = "active";
-    if (map[sid][id]["t"] !== undefined) {
-        silence = now - map[sid][id].t;
-    }
-    if (silence > (BLE_PROXIMITY_OUTOFRANGE_THRESHOLD_TIME * 1000)) {
-        state = "oor";
-    } else {
-        if (rssi <= BLE_PROXIMITY_LEVEL.NEAR) {
-            state = "near";
-        } else if (avgrssi > BLE_PROXIMITY_LEVEL.NEAR && avgrssi <= BLE_PROXIMITY_LEVEL.ROOM) {
-            state = "room";
-            if (rssi < BLE_PROXIMITY_LEVEL.ROOM)
-                map[sid][id]["hist"] = [rssi];
-            map[sid][id]["avgrssi"] = rssi;
-        } else {
-            state = "far";
+    
+    // Check which beacons have have to be marked oor (out of range)
+    for (var scannerid in map) {
+        for (var beaconid in map[scannerid]) {
+             
+            if (map[scannerid][beaconid]["t"] !== undefined) 
+                map[scannerid][beaconid]["silence"] = (now - map[scannerid][beaconid].t);   
+            if (map[scannerid][beaconid].silence !== undefined) {
+                var silence = map[scannerid][beaconid].silence;
+                if (silence > (BLE_PROXIMITY_OUTOFRANGE_THRESHOLD_TIME * 1000)) {
+                    map[scannerid][beaconid].state = "oor";
+                }    
+            }
+            else
+                map[scannerid][beaconid].silence = 0;
         }
-
+    }
+    
+    map[sid][id]["t"] = now;
+    
+    
+    if (rssi <= BLE_PROXIMITY_LEVEL.NEAR) {
+        state = "near";
+    } else if (avgrssi > BLE_PROXIMITY_LEVEL.NEAR && avgrssi <= BLE_PROXIMITY_LEVEL.ROOM) {
+        state = "room";
+        if (rssi < BLE_PROXIMITY_LEVEL.ROOM)
+            map[sid][id]["hist"] = [rssi];
+        map[sid][id]["avgrssi"] = rssi;
+    } else {
+        state = "far";
     }
 
     map[sid][id]["state"] = state;
@@ -108,6 +124,7 @@ function BLE_updateProximityMap() {
 
 //log(load("test"));
 BLE_updateProximityMap();
+log("BLEMAP",api.state["BLEMAP"]);
 
 /**
  * Checks if a beacon is near to a scanner. Returns true, if so.
