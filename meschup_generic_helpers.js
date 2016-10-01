@@ -7,7 +7,8 @@
  * author: Thomas Kubitza
  * email: thomas.kubitza@vis.uni-stuttgart.de
  * 
- * last change: 06.09.2016 , TK
+ * last change: 06.09.2016, TK
+ *              01.10.2016, TK: Added State, Stream objects and jQuery-like $-query-interface
  */
 
 
@@ -270,19 +271,34 @@ function isTriggeredByModuleType(moduleType) {
  * @param {func} callback
  */
 function valueSequence (module, propName, delay, seq) {
-    
+    try {
     var i = 0;
     var run = function() {
         setTimeout(function(){
-            module[propName] = seq[i];
-            log("i: ",i);
-            i++;
-            if (i < seq.length)
+            try {
+                if (module !== null && module !== undefined) {
+                    if (module[propName] !== undefined)
+                        module[propName] = seq[i];
+                }
+                
+                //log("i: ",i);
+                i++;
+                
+                if (i < seq.length)
                 run();
+            }
+            catch (e) {
+                console.log("valueSequence inside setTimeout error",e);
+            }
+            
         },delay);
     }
     
     run();
+    }
+    catch (e2) {
+        console.log("valueSequence inside setTimeout error",e2);
+    }
         
 }
 
@@ -357,3 +373,318 @@ function getDeviceByBleTag (tagid) {
     return null;
 }
 
+
+/**
+ * State provides a convenient object-oriented way to work with persistent states
+ * 
+ * @param {String} storage key 
+ * @param optional {any} initial value, null id not set 
+ * 
+ * Examples:
+ *   var btn = new State("mybutton",0); 
+ *   log(btn.value++); // Increments and returns
+ *   btn.value = true;
+ *   log(btn.toggle().value); // toggles the value if it boolean or 0/1, otherwise no effect
+ *   log(btn.toggle(500).value); // toggles the value with a debounce of 500ms
+ */
+function State (name,defaultvalue) {
+    
+    var self = this;
+    if (defaultvalue === undefined)
+        defaultvalue = null;
+    this._GLOBALSTOREKEY = "__stateobjectstore";
+    
+    if (api.state[this._GLOBALSTOREKEY] === undefined) {
+        api.state[this._GLOBALSTOREKEY] = {};
+    }
+
+    if (api.state[this._GLOBALSTOREKEY][name] === undefined) {
+        api.state[this._GLOBALSTOREKEY][name] = { value : defaultvalue , last_toggle_call : 0 };
+    }
+    
+    this.name = name;
+    
+    Object.defineProperty(this, 'value', {
+        get: function() {
+            return api.state[this._GLOBALSTOREKEY][this.name].value;
+        },
+        set: function(val) {
+           api.state[this._GLOBALSTOREKEY][this.name].value = val;
+        }
+    });
+}
+
+State.prototype.toggle = function(minwaittime) {
+    if (minwaittime === undefined)
+        minwaittime = 0;
+    var rightnow = new Date().getTime();
+    var lastcall = api.state[this._GLOBALSTOREKEY][this.name].last_toggle_call;
+
+    if ((rightnow - lastcall) < minwaittime) {
+        return this;
+    }
+    api.state[this._GLOBALSTOREKEY][this.name].last_toggle_call = rightnow;
+        
+    var val = api.state[this._GLOBALSTOREKEY][this.name].value;
+    if (val === true || val === false) {
+        this.value = !val;
+        return this;
+    }
+    if (val === 0) {
+        this.value = 1;
+        return this;
+    }
+    if (val === 1) {
+        this.value = 0;
+        return this;
+    }
+    return this;
+}
+
+State.prototype.crossed = function(value,threshold,debouncetime) {
+    if (debouncetime === undefined)
+        debouncetime = 0;
+    // ToDo: Implement debounce time    
+    if (threshold === undefined)
+        return false;
+    var result = false;
+    if ((value >= threshold && this.value < threshold) || (value < threshold && this.value >= threshold)) {
+        result = true;
+    }
+    this.value = value;
+    return result;
+    
+}
+
+
+/**
+ * Generic stream reader object
+ * 
+ * @param {String} storage key 
+ * 
+ * Examples:
+ *   var gps = new Stream("gpsreadings"); 
+ *   gps.setLinebreak("\r\n"); // default is "\r"
+ *   gps.feed(api.device.BlueSmartCoin.gps.received);
+ *   while(gps.hasLine()) {
+ *     log("New Reading: "+gps.readLine());
+ *   }
+ */
+
+function Stream (name) {
+    var self = this;
+    this.MAXSTACKSIZE = 1000;
+    this.LINEBREAKCHAR = "\r";
+    
+    this.name = name;
+    
+    this._GLOBALSTOREKEY = "__streamobjectstore";
+    
+    if (api.state[this._GLOBALSTOREKEY] === undefined) {
+        api.state[this._GLOBALSTOREKEY] = {};
+    }
+    if (api.state[this._GLOBALSTOREKEY][name] === undefined) {
+        api.state[this._GLOBALSTOREKEY][name] = { buffer : "", linestack : [] , lastchange : 0 };
+    }
+    
+    Object.defineProperty(this, 'buffer', {
+        get: function() {
+            return api.state[this._GLOBALSTOREKEY][this.name].buffer;
+        },
+        set: function(val) {
+           api.state[this._GLOBALSTOREKEY][this.name].buffer = val;
+           api.state[this._GLOBALSTOREKEY][this.name].lastchange = new Date().getTime();
+        }
+    });
+    
+     Object.defineProperty(this, 'linestack', {
+        get: function() {
+            return api.state[this._GLOBALSTOREKEY][this.name].linestack;
+        },
+        set: function(val) {
+           api.state[this._GLOBALSTOREKEY][this.name].linestack = val;
+        }
+    });
+}
+
+Stream.prototype.clear = function() {
+    api.state[this._GLOBALSTOREKEY][this.name].buffer = "";
+    api.state[this._GLOBALSTOREKEY][this.name].linestack.length = 0;
+}
+
+Stream.prototype.feed = function(text) {
+    this.buffer += text;
+    this.parse();
+}
+
+Stream.prototype.parse = function() {
+    var pos = -1;
+    do {
+        pos = this.buffer.indexOf(this.LINEBREAKCHAR);
+        if (pos > -1) {
+            var line = this.buffer.substr(0,pos);
+            this.linestack.push(line);
+            if (this.linestack.length >= this.MAXSTACKSIZE-1) {
+                log("Stream: Max stack size reached");
+                this.linestack.shift()
+            }
+            this.buffer =  this.buffer.substr(pos+1);
+            //log ("Found line break at: "+pos,this.buffer,this.linestack);
+        }
+    }
+    while (pos != -1)
+}
+
+Stream.prototype.hasLine = function() {
+    return this.linestack.length > 0;
+}
+
+Stream.prototype.readLine = function() {
+    
+    return this.linestack.shift();
+}
+
+Stream.prototype.setLinebreak = function(text) {
+    this.LINEBREAKCHAR = text;
+}
+
+
+/**
+ * jQuery-like interface for querying devices and modules from the smart things pool
+ * 
+ * 
+ * Examples:
+ *   $.dev("Nex").mod("Aug").each(function(dev,name) { //Filters all devices that have "Nex" in their name and own modules with "Aug" in their name
+ *     log("Name: "+name);
+ *   })
+ * 
+ * ToDO:
+ * - Add .alive(time) filter : Shows only devices that sent a sign of live with the "time" seconds
+ * - Add .modtype(type) filter: Filter by module types
+ * - Add .group(name) filter: Filter by the device-groups
+ * - Add .qrtag() / nfctag() / bleId() filter
+ * - Add .near(rssi) filter: Filter by signal strength
+ */
+
+function thingsQuery() {
+    
+    this.results = [];
+    this.modules = [];
+    this.devices = [];
+    
+}
+
+thingsQuery.prototype.dev = function (selector) {
+    var sel_name = null;
+    sel_name = selector;
+    
+    for (var devname in api.device) {
+        if (devname.indexOf(sel_name) != -1) {
+            this.devices.push(devname);
+        }
+    }
+    return this;
+}
+
+thingsQuery.prototype.devtype = function (selector) {
+    var sel_name = null;
+    sel_name = selector;
+    
+    for (var devname in api.device) {
+        if (api.device[devname]["config"] !== undefined) {
+            if (api.device[devname].config["info"] !== undefined) {
+                if (api.device[devname].config.info["type"] !== undefined) {
+                    if (api.device[devname].config.info["type"].indexOf(sel_name) != -1) {
+                        this.devices.push(devname);
+                    }
+                }
+                
+            }
+        }
+        
+    }
+    return this;
+}
+
+thingsQuery.prototype.mod = function (selector) {
+    var sel_name = null;
+    sel_name = selector;
+    var newobj = new thingsQuery();
+    
+    for (var i=0; i < this.devices.length; i++) {
+        var devname = this.devices[i];
+        for (var modname in api.device[devname]) {
+            //log("Mod: "+modname);
+            if (modname.indexOf(sel_name) != -1) {
+                newobj.devices.push(devname);
+                newobj.modules.push(modname);
+            } 
+        }
+    }
+    return newobj;
+}
+
+thingsQuery.prototype.location = function (selector) {
+    var sel_name = null;
+    sel_name = selector;
+    var newobj = new thingsQuery();
+    
+    for (var i=0; i < this.devices.length; i++) {
+        var devname = this.devices[i];
+        
+        if (api.device[devname]["config"] !== undefined)
+            if (api.device[devname].config["info"] !== undefined) {
+                if (api.device[devname].config.info["location"] !== undefined) {
+                    if (api.device[devname].config.info.location == selector) {
+                        newobj.devices.push(devname);
+                    }
+                }
+            }
+    }
+    return newobj;
+}
+
+thingsQuery.prototype.owner = function (selector) {
+    var sel_name = null;
+    sel_name = selector;
+    var newobj = new thingsQuery();
+    
+    for (var i=0; i < this.devices.length; i++) {
+        var devname = this.devices[i];
+        
+        if (api.device[devname]["config"] !== undefined)
+            if (api.device[devname].config["info"] !== undefined) {
+                if (api.device[devname].config.info["owner"] !== undefined) {
+                    if (api.device[devname].config.info.owner == selector) {
+                        newobj.devices.push(devname);
+                    }
+                }
+            }
+    }
+    return newobj;
+}
+
+thingsQuery.prototype.online = function () {
+    var newobj = new thingsQuery();
+    
+    for (var i=0; i < this.devices.length; i++) {
+        var devname = this.devices[i];
+        if (api.device[devname]["state"] !== undefined)
+            if (api.device[devname].state["deviceStatus"] !== undefined) {
+                if (api.device[devname].state.deviceStatus == "RUNNING") {
+                    newobj.devices.push(devname);
+                }
+            }
+    }
+    return newobj;
+}
+
+
+thingsQuery.prototype.each = function (callback) {
+    for (var i=0; i < this.devices.length; i++) {
+        var key = this.devices[i];
+        callback(api.device[key],key);
+    }
+}
+
+var $ = new thingsQuery ();
